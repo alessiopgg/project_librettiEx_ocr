@@ -11,8 +11,20 @@ Primary outputs:
 * document_summary.csv        -> aggregate by document
 * category_summary.csv        -> aggregate CER/WER by category and PRE/POST
 
-PRE  = normalized OCR value before category-specific correction
-POST = normalized OCR value after category-specific correction
+PRE/POST are tracked for both keys and values.
+
+KEY PRE  = normalized OCR key exactly as observed by the parser.
+KEY POST = canonical template key only when the key was actually detected and its
+           normalized OCR text differs from the template expected text. Missing
+           keys are never filled from the template.
+
+VALUE PRE  = normalized OCR value before category-specific correction.
+VALUE POST = normalized OCR value after category-specific correction.
+
+For human-readable row outputs, key PRE/POST text columns are populated only
+when a key correction is actually applied; the legacy ``ocr_key`` column always
+keeps the original normalized OCR key. Internally the effective POST key is
+retained for metrics and summaries.
 
 Ground truth is used only here, never by parse_fields.py.
 """
@@ -260,6 +272,35 @@ def dictionary_local_recovery(
     return "", "", info
 
 
+
+def postprocess_key(
+    text: str,
+    expected: str,
+    key_status: str,
+) -> tuple[str, dict[str, Any]]:
+    """Canonicalize a detected key using the known template text.
+
+    The template is already the structural source used by the parser. Once a key
+    has been detected (found/recovered/local), its OCR spelling may be replaced
+    by the normalized template spelling for POST evaluation. Missing keys are
+    never synthesized. Ground truth is not consulted here.
+    """
+    expected_normalized = normalize_text(expected)
+    info = {
+        "key_correction_applied": False,
+        "key_correction_source": "",
+    }
+
+    if key_status == "missing" or not text:
+        return text, info
+
+    if text == expected_normalized:
+        return text, info
+
+    info["key_correction_applied"] = True
+    info["key_correction_source"] = "template_expected"
+    return expected_normalized, info
+
 def postprocess_value(
     text: str,
     category: str,
@@ -380,12 +421,27 @@ def evaluate_document(
         key_id = gt_field["key"]["id"]
         ocr_field = ocr_fields[key_id]
 
+        # Key comparison and template-based POST canonicalization.
         gt_key = gt_field["key"]["normalized"]
         ocr_key = ocr_field["key"]["normalized"]
         key_status = ocr_field["key"]["status"]
         key_detected = key_status != "missing"
-        key_correct = gt_key == ocr_key
-        key_m = metrics(gt_key, ocr_key)
+
+        key_pre = ocr_key
+        key_post, key_correction = postprocess_key(
+            key_pre,
+            ocr_field["key"]["expected"],
+            key_status,
+        )
+
+        key_correct_pre = gt_key == key_pre
+        key_correct_post = gt_key == key_post
+        key_pre_m = metrics(gt_key, key_pre)
+        key_post_m = metrics(gt_key, key_post)
+
+        # Backward-compatible aliases: historical key_* fields keep PRE semantics.
+        key_correct = key_correct_pre
+        key_m = key_pre_m
 
         category = gt_field["value"]["category"]
         gt_value = gt_field["value"]["normalized"]
@@ -395,10 +451,16 @@ def evaluate_document(
         )
 
         value_pre_m, value_correct_pre, field_correct_pre = evaluate_value(
-            gt_value, value["ocr_value_pre"], value["value_evaluable_pre"], key_correct
+            gt_value,
+            value["ocr_value_pre"],
+            value["value_evaluable_pre"],
+            key_correct_pre,
         )
         value_post_m, value_correct_post, field_correct_post = evaluate_value(
-            gt_value, value["ocr_value_post"], value["value_evaluable_post"], key_correct
+            gt_value,
+            value["ocr_value_post"],
+            value["value_evaluable_post"],
+            key_correct_post,
         )
 
         row = {
@@ -407,17 +469,26 @@ def evaluate_document(
             "order": gt_field["order"],
             "field_id": gt_field["value"]["id"],
             "category": category,
-            # Key: expected/GT/OCR side by side
+            # Key: expected/GT/OCR side by side. Legacy columns retain PRE semantics.
             "key_id": key_id,
             "key_expected": gt_field["key"]["expected"],
             "gt_key": gt_key,
             "ocr_key": ocr_key,
+            "ocr_key_pre": key_pre if key_correction["key_correction_applied"] else "",
+            "ocr_key_post": key_post if key_correction["key_correction_applied"] else "",
             "key_status": key_status,
             "key_detected": key_detected,
             "key_correct": key_correct,
+            "key_correct_pre": key_correct_pre,
+            "key_correct_post": key_correct_post,
             "key_cer": key_m["cer"],
             "key_wer": key_m["wer"],
-            # Value: GT/PRE/POST side by side
+            "key_cer_pre": key_pre_m["cer"],
+            "key_wer_pre": key_pre_m["wer"],
+            "key_cer_post": key_post_m["cer"],
+            "key_wer_post": key_post_m["wer"],
+            **key_correction,
+            # Value: GT/PRE/POST side by side.
             "gt_value": gt_value,
             "ocr_value_pre": value["ocr_value_pre"],
             "ocr_value_post": value["ocr_value_post"],
@@ -433,15 +504,17 @@ def evaluate_document(
             "value_correct_post": value_correct_post,
             "field_correct_pre": field_correct_pre,
             "field_correct_post": field_correct_post,
-            # POST-processing diagnostics
+            # Value POST-processing diagnostics.
             **value["correction"],
-            # Value metrics
+            # Value metrics.
             "value_cer_pre": value_pre_m["cer"],
             "value_wer_pre": value_pre_m["wer"],
             "value_cer_post": value_post_m["cer"],
             "value_wer_post": value_post_m["wer"],
-            # Internal counts used for aggregation
-            "_key_metrics": key_m,
+            # Internal counts used for aggregation. _key_metrics is a PRE alias.
+            "_key_metrics": key_pre_m,
+            "_key_pre_metrics": key_pre_m,
+            "_key_post_metrics": key_post_m,
             "_value_pre_metrics": value_pre_m,
             "_value_post_metrics": value_post_m,
         }
@@ -475,16 +548,27 @@ def _rate(numerator: int, denominator: int) -> float | None:
 
 
 def _count_results(rows: list[dict[str, Any]]) -> dict[str, int]:
+    key_correct_pre = sum(r["key_correct_pre"] is True for r in rows)
+    key_correct_post = sum(r["key_correct_post"] is True for r in rows)
+    key_corrected = sum(bool(r["key_correction_applied"]) for r in rows)
+    value_corrected = sum(bool(r["correction_applied"]) for r in rows)
     return {
         "key_detected": sum(bool(r["key_detected"]) for r in rows),
-        "key_correct": sum(bool(r["key_correct"]) for r in rows),
+        # Historical aliases retain PRE semantics.
+        "key_correct": key_correct_pre,
+        "key_correct_pre": key_correct_pre,
+        "key_correct_post": key_correct_post,
+        "key_corrected": key_corrected,
         "value_evaluable_pre": sum(bool(r["value_evaluable_pre"]) for r in rows),
         "value_evaluable_post": sum(bool(r["value_evaluable_post"]) for r in rows),
         "value_correct_pre": sum(r["value_correct_pre"] is True for r in rows),
         "value_correct_post": sum(r["value_correct_post"] is True for r in rows),
         "field_correct_pre": sum(r["field_correct_pre"] is True for r in rows),
         "field_correct_post": sum(r["field_correct_post"] is True for r in rows),
-        "corrected": sum(bool(r["correction_applied"]) for r in rows),
+        # Historical 'corrected' counter is value-only.
+        "corrected": value_corrected,
+        "value_corrected": value_corrected,
+        "total_corrected": key_corrected + value_corrected,
     }
 
 
@@ -502,7 +586,8 @@ def build_field_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for field_id, items in sorted(groups.items()):
         occurrences = len(items)
         c = _count_results(items)
-        key_aggr = _aggregate_metrics(items, "_key_metrics")
+        key_pre_aggr = _aggregate_metrics(items, "_key_pre_metrics")
+        key_post_aggr = _aggregate_metrics(items, "_key_post_metrics")
         pre_aggr = _aggregate_metrics(items, "_value_pre_metrics", "value_evaluable_pre")
         post_aggr = _aggregate_metrics(items, "_value_post_metrics", "value_evaluable_post")
 
@@ -514,11 +599,25 @@ def build_field_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "occurrences": occurrences,
             "key_detected": c["key_detected"],
             "key_detection_rate": _rate(c["key_detected"], occurrences),
-            "key_correct": c["key_correct"],
-            "key_accuracy": _rate(c["key_correct"], occurrences),
-            "key_errors": occurrences - c["key_correct"],
-            "key_cer": key_aggr["cer"],
-            "key_wer": key_aggr["wer"],
+            # Historical key columns retain PRE semantics.
+            "key_correct": c["key_correct_pre"],
+            "key_accuracy": _rate(c["key_correct_pre"], occurrences),
+            "key_errors": occurrences - c["key_correct_pre"],
+            "key_cer": key_pre_aggr["cer"],
+            "key_wer": key_pre_aggr["wer"],
+            # Explicit key PRE/POST metrics.
+            "key_correct_pre": c["key_correct_pre"],
+            "key_errors_pre": occurrences - c["key_correct_pre"],
+            "key_accuracy_pre": _rate(c["key_correct_pre"], occurrences),
+            "key_cer_pre": key_pre_aggr["cer"],
+            "key_wer_pre": key_pre_aggr["wer"],
+            "key_correct_post": c["key_correct_post"],
+            "key_errors_post": occurrences - c["key_correct_post"],
+            "key_accuracy_post": _rate(c["key_correct_post"], occurrences),
+            "key_cer_post": key_post_aggr["cer"],
+            "key_wer_post": key_post_aggr["wer"],
+            "key_corrections_applied": c["key_corrected"],
+            # Value PRE/POST metrics, including local dictionary recovery.
             "value_evaluable_pre": c["value_evaluable_pre"],
             "value_skipped_pre": occurrences - c["value_evaluable_pre"],
             "value_evaluable_post": c["value_evaluable_post"],
@@ -534,6 +633,8 @@ def build_field_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "value_cer_post": post_aggr["cer"],
             "value_wer_post": post_aggr["wer"],
             "post_corrections_applied": c["corrected"],
+            "value_corrections_applied": c["value_corrected"],
+            "total_corrections_applied": c["total_corrected"],
             "field_correct_pre": c["field_correct_pre"],
             "field_accuracy_pre": _rate(c["field_correct_pre"], c["value_evaluable_pre"]),
             "field_correct_post": c["field_correct_post"],
@@ -557,8 +658,16 @@ def build_document_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "fields_total": total,
             "keys_detected": c["key_detected"],
             "key_detection_rate": _rate(c["key_detected"], total),
-            "keys_correct": c["key_correct"],
-            "key_accuracy": _rate(c["key_correct"], total),
+            # Historical key columns retain PRE semantics.
+            "keys_correct": c["key_correct_pre"],
+            "key_accuracy": _rate(c["key_correct_pre"], total),
+            # Explicit key PRE/POST.
+            "keys_correct_pre": c["key_correct_pre"],
+            "key_accuracy_pre": _rate(c["key_correct_pre"], total),
+            "keys_correct_post": c["key_correct_post"],
+            "key_accuracy_post": _rate(c["key_correct_post"], total),
+            "key_corrections_applied": c["key_corrected"],
+            # Value PRE/POST.
             "values_evaluable_pre": c["value_evaluable_pre"],
             "values_skipped_pre": total - c["value_evaluable_pre"],
             "values_evaluable_post": c["value_evaluable_post"],
@@ -572,6 +681,8 @@ def build_document_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "fields_correct_post": c["field_correct_post"],
             "field_accuracy_post": _rate(c["field_correct_post"], c["value_evaluable_post"]),
             "post_corrections_applied": c["corrected"],
+            "value_corrections_applied": c["value_corrected"],
+            "total_corrections_applied": c["total_corrected"],
         })
     return output
 
@@ -588,14 +699,18 @@ def build_category_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         }
     )
 
+    # Keys have distinct PRE/POST stages. POST canonicalization uses only the
+    # known template and is never applied to missing keys.
     for stage in STAGES:
         for row in rows:
             b = buckets[("key", stage)]
             b["items_total"] += 1
             b["items_evaluated"] += 1
-            b["items_correct"] += int(bool(row["key_correct"]))
-            _add_metrics(b["metrics"], row["_key_metrics"])
+            b["items_correct"] += int(row[f"key_correct_{stage}"] is True)
+            _add_metrics(b["metrics"], row[f"_key_{stage}_metrics"])
 
+    # Values have distinct PRE/POST evaluability because a dictionary value may
+    # be locally recovered POST even when PRE boundaries were unreliable.
     for row in rows:
         for stage in STAGES:
             b = buckets[(row["category"], stage)]
@@ -649,9 +764,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--global-threshold", type=float, default=88.0)
     parser.add_argument("--recovery-threshold", type=float, default=72.0)
     parser.add_argument("--local-fuzzy-threshold", type=float, default=82.0)
-    parser.add_argument("--dictionary-threshold", type=float, default=80.0)
+    parser.add_argument("--dictionary-threshold", type=float, default=70.0)
     parser.add_argument(
-        "--dictionary-margin", type=float, default=0.0,
+        "--dictionary-margin", type=float, default=15.0,
         help="Minimum score gap between the best and second dictionary candidate.",
     )
     return parser.parse_args()
@@ -713,6 +828,13 @@ def main() -> None:
             "dictionary_margin": args.dictionary_margin,
         },
         "dictionaries_file": str(args.dictionaries) if args.dictionaries.exists() else None,
+        "key_postprocessing": {
+            "enabled": True,
+            "source": "template_expected",
+            "detected_keys_only": True,
+            "fill_missing_keys": False,
+            "public_pre_post_text_only_when_changed": True,
+        },
         "field_summary": field_summary,
         "document_summary": document_summary,
         "category_summary": category_summary,
@@ -721,7 +843,9 @@ def main() -> None:
 
     total_keys = len(all_rows)
     detected_keys = sum(bool(row["key_detected"]) for row in all_rows)
-    correct_keys = sum(bool(row["key_correct"]) for row in all_rows)
+    correct_keys_pre = sum(row["key_correct_pre"] is True for row in all_rows)
+    correct_keys_post = sum(row["key_correct_post"] is True for row in all_rows)
+    key_corrections = sum(bool(row["key_correction_applied"]) for row in all_rows)
     value_skipped_pre = sum(not bool(row["value_evaluable_pre"]) for row in all_rows)
     value_skipped_post = sum(not bool(row["value_evaluable_post"]) for row in all_rows)
 
@@ -732,13 +856,19 @@ def main() -> None:
         f"({100 * detected_keys / total_keys:.2f}%)"
     )
     print(
-        f"OCR keys exactly correct: {correct_keys}/{total_keys} "
-        f"({100 * correct_keys / total_keys:.2f}%)"
+        f"OCR keys exactly correct PRE: {correct_keys_pre}/{total_keys} "
+        f"({100 * correct_keys_pre / total_keys:.2f}%)"
     )
+    print(
+        f"OCR keys exactly correct POST: {correct_keys_post}/{total_keys} "
+        f"({100 * correct_keys_post / total_keys:.2f}%)"
+    )
+    print(f"Key canonicalizations applied from template: {key_corrections}")
     print(f"Value fields skipped PRE because of unreliable boundaries: {value_skipped_pre}")
     print(f"Value fields skipped POST after dictionary recovery: {value_skipped_post}")
     print(f"Output: {args.output}")
     print("Main files: all_fields.csv, field_summary.csv, document_summary.csv, category_summary.csv")
+
 
 
 if __name__ == "__main__":
