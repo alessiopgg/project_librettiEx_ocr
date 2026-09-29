@@ -1,0 +1,22 @@
+# Ignora tutto di default
+*
+
+# File principali
+!.gitignore
+!README.md
+!requirements.txt
+!run_ocr_models.py
+!normalize_texts.py
+!evaluate_normalized.py
+
+# Field analysis
+!field_analysis/
+!field_analysis/parse_fields.py
+!field_analysis/evaluate_fields.py
+
+# Template
+!field_analysis/templates/
+!field_analysis/templates/template1.yaml
+!field_analysis/templates/template2.yaml
+!field_analysis/templates/template3.yaml
+!field_analysis/templates/dictionaries.yaml

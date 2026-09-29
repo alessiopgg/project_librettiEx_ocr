@@ -1,0 +1,183 @@
+template:
+  id: template2
+  documents:
+    - libretto_012
+    - libretto_013
+    - libretto_014
+    - libretto_015
+    - libretto_016
+    - libretto_017
+
+  fields:
+    - order: 1
+      key:
+        id: k01_cognome_nome
+        text: "Cognome e Nome"
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: cognome_nome
+        category: string
+
+    - order: 2
+      key:
+        id: k02_di
+        text: "di"
+        detection: {scope: local, match: exact}
+      value:
+        id: nome_padre
+        category: string
+
+    - order: 3
+      key:
+        id: k03_e_della
+        text: "e della"
+        detection: {scope: local, match: fuzzy}
+      value:
+        id: nome_madre
+        category: string
+
+    - order: 4
+      key:
+        id: k04_nato_il
+        text: "Nato il"
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: data_nascita
+        category: numeric
+
+    - order: 5
+      key:
+        id: k05_a
+        text: "a"
+        detection: {scope: local, match: exact}
+      value:
+        id: luogo_nascita
+        category: string
+
+    - order: 6
+      key:
+        id: k06_immatricolato_il
+        text: "Immatricolato il"
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: data_immatricolazione
+        category: numeric
+
+    - order: 7
+      key:
+        id: k07_facolta_left
+        text: "Facoltà"
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: facolta_left
+        category: dictionary
+        dictionary: faculties
+
+    - order: 8
+      key:
+        id: k08_titolo_studio_ammissione
+        text: "Titolo di studio per l'ammissione"
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: titolo_studio_ammissione
+        category: string
+
+    - order: 9
+      key:
+        id: k09_laureato_il
+        text: "Laureato il"
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: laureato_il_value
+        category: string
+
+    - order: 10
+      key:
+        id: k10_titolo_tesi
+        text: "Titolo della tesi di laurea"
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: titolo_tesi
+        category: string
+
+    - order: 11
+      key:
+        id: k11_congedato_il
+        text: "Congedato il"
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: congedato_il_value
+        category: string
+
+    - order: 12
+      key:
+        id: k12_per
+        text: "per"
+        detection: {scope: local, match: exact}
+      value:
+        id: motivo_congedo
+        category: string
+
+    - order: 13
+      key:
+        id: k13_fuori_corso_dal
+        text: "Fuori corso dal"
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: data_fuori_corso
+        category: numeric
+
+    - order: 14
+      key:
+        id: k14_numero_filza
+        text: "Numero della filza"
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: numero_filza
+        category: numeric
+
+    - order: 15
+      key:
+        id: k15_numero_inserto
+        text: "N. inserto"
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: numero_inserto
+        category: numeric
+
+    - order: 16
+      key:
+        id: k16_matricola
+        text: "Matricola N."
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: matricola
+        category: numeric
+
+    - order: 17
+      key:
+        id: k17_registro
+        text: "Registro N."
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: registro
+        category: string
+
+    - order: 18
+      key:
+        id: k18_pagina
+        text: "Pag. N."
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: pagina
+        category: numeric
+
+    - order: 19
+      key:
+        id: k19_facolta_right
+        text: "Facoltà"
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: facolta_right
+        category: dictionary
+        dictionary: faculties

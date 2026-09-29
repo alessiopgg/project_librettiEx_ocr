@@ -1,0 +1,43 @@
+# Dizionario esterno per i campi correggibili dei libretti.
+# Le voci sono derivate da fonti storiche/istituzionali dell'Università di Firenze,
+# non dalla ground truth dei 18 libretti.
+
+metadata:
+  name: faculties
+  version: 1
+  construction: external_sources_only
+  frozen_before_evaluation: true
+  notes:
+    - "Le denominazioni sono normalizzate nello stesso formato usato dalla pipeline."
+    - "Un valore OCR vuoto non deve essere completato automaticamente dal dizionario."
+    - "Il dizionario serve solo alla correzione di valori OCR non vuoti."
+
+  sources:
+    - id: unifi_annuari_storici
+      description: "Annuari storici dell'Università di Firenze, con elenchi di Facoltà, Scuole e Scuole di specializzazione."
+      periods:
+        - "1931-1932"
+        - "1941-1943"
+        - "1943-1944 / 1952-1953"
+        - "1953-1956"
+
+    - id: fup_centenario_2024
+      description: "Firenze e l'Università. Passato, presente e futuro, Firenze University Press, 2024."
+      note: "Usato anche per attestare la Facoltà di Ingegneria, istituita nel 1970."
+
+dictionaries:
+  faculties:
+    - agraria
+    - architettura
+    - economia
+    - economia e commercio
+    - farmacia
+    - giurisprudenza
+    - ingegneria
+    - lettere e filosofia
+    - magistero
+    - medicina
+    - medicina e chirurgia
+    - scienze matematiche fisiche e naturali
+    - scienze politiche
+    - scuole di specializzazione

@@ -1,0 +1,170 @@
+template:
+  id: template1
+  documents:
+    - libretto_001
+    - libretto_002
+    - libretto_003
+    - libretto_004
+    - libretto_005
+    - libretto_006
+    - libretto_007
+    - libretto_008
+    - libretto_009
+    - libretto_010
+    - libretto_011
+
+  fields:
+    - order: 1
+      key:
+        id: k01_cognome_nome
+        text: "Cognome e nome"
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: cognome_nome
+        category: string
+
+    - order: 2
+      key:
+        id: k02_nato_il
+        text: "Nato il"
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: data_nascita
+        category: numeric
+
+    - order: 3
+      key:
+        id: k03_a
+        text: "a"
+        detection: {scope: local, match: exact}
+      value:
+        id: luogo_nascita
+        category: string
+
+    - order: 4
+      key:
+        id: k04_facolta_left
+        text: "Facoltà"
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: facolta_left
+        category: dictionary
+        dictionary: faculties
+
+    - order: 5
+      key:
+        id: k05_titolo_studio_ammissione
+        text: "Titolo di studio per l'ammissione"
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: titolo_studio_ammissione
+        category: string
+
+    - order: 6
+      key:
+        id: k06_laureato_il
+        text: "Laureato il"
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: data_laurea
+        category: numeric
+
+    - order: 7
+      key:
+        id: k07_in_laurea
+        text: "in"
+        detection: {scope: local, match: exact}
+      value:
+        id: corso_laurea
+        category: string
+
+    - order: 8
+      key:
+        id: k08_specializzato_il
+        text: "Specializzato il"
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: data_specializzazione
+        category: numeric
+
+    - order: 9
+      key:
+        id: k09_in_specializzazione
+        text: "in"
+        detection: {scope: local, match: exact}
+      value:
+        id: specializzazione
+        category: string
+
+    - order: 10
+      key:
+        id: k10_congedato_il
+        text: "Congedato il"
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: congedato_il_value
+        category: string
+
+    - order: 11
+      key:
+        id: k11_per
+        text: "per"
+        detection: {scope: local, match: exact}
+      value:
+        id: motivo_congedo
+        category: string
+
+    - order: 12
+      key:
+        id: k12_numero_filza
+        text: "Numero della filza"
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: numero_filza
+        category: numeric
+
+    - order: 13
+      key:
+        id: k13_numero_inserto
+        text: "N. inserto"
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: numero_inserto
+        category: numeric
+
+    - order: 14
+      key:
+        id: k14_matricola
+        text: "Matricola N."
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: matricola
+        category: numeric
+
+    - order: 15
+      key:
+        id: k15_registro
+        text: "Registro N."
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: registro
+        category: string
+
+    - order: 16
+      key:
+        id: k16_pagina
+        text: "Pag. N."
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: pagina
+        category: numeric
+
+    - order: 17
+      key:
+        id: k17_facolta_right
+        text: "Facoltà"
+        detection: {scope: global, match: fuzzy}
+      value:
+        id: facolta_right
+        category: dictionary
+        dictionary: faculties
