@@ -8,21 +8,14 @@ Il progetto analizza l'efficacia di modelli OCR e Vision-Language nella trascriz
 
 È stato costruito un dataset di **18 libretti universitari storici**, accompagnati da trascrizioni manuali di riferimento (*ground truth*). Sono stati confrontati quattro modelli Vision-Language generalisti (**Gemma 4, Qwen3-VL, Qwen3.5 e Nemotron 3**) e due modelli OCR specializzati (**GLM-OCR e DeepSeek-OCR**), eseguiti localmente tramite **Ollama**. La sperimentazione ha considerato differenti strategie di prompting e dimensioni della finestra di contesto.
 
-<table>
-  <tr>
-    <td align="center" width="46%"><b>Esempio di libretto</b></td>
-    <td align="center" width="8%"></td>
-    <td align="center" width="46%"><b>Esempio di trascrizione</b></td>
-  </tr>
-  <tr>
-    <td valign="top">
-      <img src="libretto_di_esempio.png" alt="Esempio di libretto storico" width="100%">
-    </td>
-    <td align="center" valign="middle" style="font-size: 28px;">
-      ⟶
-    </td>
-    <td valign="top">
-      <pre>
+
+<div>
+  <img src="libretto_di_esempio.png"
+       alt="Esempio di libretto storico"
+       width="47%"
+       align="left">
+
+  <pre>
 Cognome e nome
 Nato il a Firenze
 Facoltà SCUOLE DI SPECIALIZZAZIONE
@@ -41,10 +34,9 @@ Matricola N.
 Registro N.
 Pag. N.
 Facoltà SCUOLE DI SPECIALIZZAZIONE
-      </pre>
-    </td>
-  </tr>
-</table>
+  </pre>
+</div>
+
 
 La valutazione è articolata in due livelli:
 
