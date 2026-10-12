@@ -23,8 +23,8 @@ Titolo di studio per l'ammissione
 Maturità
 Laureato il
 in
-Specializzato il in
-Chirurgia App. Digerente
+Specializzato il 
+in Chirurgia App. Digerente
 Congedato il
 per
 
