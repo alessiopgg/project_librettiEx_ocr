@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compute normalized CER and WER from previously normalized OCR texts.
+"""Compute normalized OCR metrics from previously normalized texts.
 
 Expected project layout:
 
@@ -80,6 +80,10 @@ class FileMetrics:
     word_insertions: int
     word_errors: int
     wer: float | None
+    word_matches: int
+    word_precision: float
+    word_recall: float
+    word_f1: float
     exact_match: bool
 
 
@@ -102,6 +106,10 @@ PER_FILE_FIELDS = [
     "word_insertions",
     "word_errors",
     "wer",
+    "word_matches",
+    "word_precision",
+    "word_recall",
+    "word_f1",
     "exact_match",
 ]
 
@@ -133,6 +141,10 @@ SUMMARY_FIELDS = [
     "word_insertions",
     "word_errors",
     "micro_wer",
+    "total_word_matches",
+    "micro_word_precision",
+    "micro_word_recall",
+    "micro_word_f1",
     "macro_wer_mean",
     "macro_wer_median",
     "macro_wer_population_stddev",
@@ -169,6 +181,32 @@ def error_rate(error_count: int, reference_length: int, hypothesis_length: int) 
     return None
 
 
+def word_overlap_metrics(
+    reference_words: list[str],
+    hypothesis_words: list[str],
+) -> tuple[int, float, float, float]:
+    """Return order-independent word matches, precision, recall, and F1."""
+
+    reference_counts = Counter(reference_words)
+    hypothesis_counts = Counter(hypothesis_words)
+    matches = sum((reference_counts & hypothesis_counts).values())
+
+    if hypothesis_words:
+        precision = matches / len(hypothesis_words)
+    else:
+        precision = 1.0 if not reference_words else 0.0
+
+    if reference_words:
+        recall = matches / len(reference_words)
+    else:
+        recall = 1.0 if not hypothesis_words else 0.0
+
+    total_words = len(reference_words) + len(hypothesis_words)
+    f1 = 2 * matches / total_words if total_words > 0 else 1.0
+
+    return matches, precision, recall, f1
+
+
 def evaluate_pair(
     experiment: str,
     model: str,
@@ -184,6 +222,9 @@ def evaluate_pair(
 
     character_counts = edit_counts(reference, hypothesis)
     word_counts = edit_counts(reference_words, hypothesis_words)
+    word_matches, word_precision, word_recall, word_f1 = word_overlap_metrics(
+        reference_words, hypothesis_words
+    )
 
     return FileMetrics(
         experiment=experiment,
@@ -204,6 +245,10 @@ def evaluate_pair(
         word_insertions=word_counts.insertions,
         word_errors=word_counts.errors,
         wer=error_rate(word_counts.errors, len(reference_words), len(hypothesis_words)),
+        word_matches=word_matches,
+        word_precision=word_precision,
+        word_recall=word_recall,
+        word_f1=word_f1,
         exact_match=reference == hypothesis,
     )
 
@@ -322,6 +367,22 @@ def summarize_model(rows: list[FileMetrics]) -> dict[str, Any]:
     total_word_deletions = sum(row.word_deletions for row in rows)
     total_word_insertions = sum(row.word_insertions for row in rows)
     total_word_errors = sum(row.word_errors for row in rows)
+    total_word_matches = sum(row.word_matches for row in rows)
+
+    micro_word_precision = (
+        total_word_matches / total_hypothesis_words
+        if total_hypothesis_words > 0
+        else (1.0 if total_reference_words == 0 else 0.0)
+    )
+    micro_word_recall = (
+        total_word_matches / total_reference_words
+        if total_reference_words > 0
+        else (1.0 if total_hypothesis_words == 0 else 0.0)
+    )
+    total_words = total_reference_words + total_hypothesis_words
+    micro_word_f1 = (
+        2 * total_word_matches / total_words if total_words > 0 else 1.0
+    )
 
     exact_matches = sum(row.exact_match for row in rows)
 
@@ -356,6 +417,10 @@ def summarize_model(rows: list[FileMetrics]) -> dict[str, Any]:
             if total_reference_words > 0
             else None
         ),
+        "total_word_matches": total_word_matches,
+        "micro_word_precision": micro_word_precision,
+        "micro_word_recall": micro_word_recall,
+        "micro_word_f1": micro_word_f1,
     }
 
     summary.update(descriptive_statistics(finite_values(rows, "cer"), "macro_cer"))
@@ -419,11 +484,21 @@ def write_report(
             "edit_distance": "unit-cost Levenshtein substitutions + deletions + insertions",
             "cer": "character_errors / reference_characters",
             "wer": "word_errors / reference_words",
-            "micro": "sum of errors across files / sum of reference units across files",
+            "word_matches": (
+                "sum over vocabulary of min(reference word count, hypothesis word count); "
+                "word order is ignored"
+            ),
+            "word_precision": "word_matches / hypothesis_words",
+            "word_recall": "word_matches / reference_words",
+            "word_f1": "2 * word_matches / (reference_words + hypothesis_words)",
+            "micro": (
+                "aggregate counts across files before computing CER, WER, Word Precision, "
+                "Word Recall, and Word F1"
+            ),
             "macro": "descriptive statistics of per-file error rates",
             "missing_hypothesis": "evaluated as an empty hypothesis",
             "empty_reference": "per-file rate is 0 only when hypothesis is also empty; otherwise null",
-            "rates_can_exceed_one": True,
+            "cer_wer_can_exceed_one": True,
         },
         "model_summaries": [serializable_dict(summary) for summary in summaries],
         "extra_output_files": extra_outputs,
@@ -441,8 +516,8 @@ def write_report(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Compute normalized CER and WER for every experiment/model using "
-            "the texts produced by normalize_texts.py."
+            "Compute normalized CER, WER, Word Precision, Word Recall, and Word F1 "
+            "for every experiment/model using the texts produced by normalize_texts.py."
         )
     )
     parser.add_argument(

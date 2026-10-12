@@ -9,7 +9,7 @@ Primary outputs:
 * all_fields.csv              -> all document rows
 * field_summary.csv           -> aggregate by semantic field
 * document_summary.csv        -> aggregate by document
-* category_summary.csv        -> aggregate CER/WER by category and PRE/POST
+* category_summary.csv        -> final metrics by category (coverage/exact/error severity)
 
 PRE/POST are tracked for both keys and values.
 
@@ -46,6 +46,11 @@ from parse_fields import TRANSCRIPTION_PATTERN, load_templates, normalize_text, 
 
 
 STAGES = ("pre", "post")
+VALUE_REPORT_STAGES = {
+    "dictionary": STAGES,
+    "numeric": ("pre",),
+    "string": ("pre",),
+}
 METRIC_COUNTS = (
     "ref_chars", "hyp_chars", "char_errors",
     "char_substitutions", "char_deletions", "char_insertions",
@@ -128,16 +133,34 @@ def _final_metrics(bucket: dict[str, int]) -> dict[str, Any]:
     return result
 
 
-def _aggregate_metrics(
+def _aggregate_non_exact(
     rows: list[dict[str, Any]],
     metric_key: str,
+    correct_key: str,
     evaluable_key: str | None = None,
-) -> dict[str, Any]:
+) -> tuple[int, dict[str, Any]]:
+    """Micro-aggregate edit metrics only over evaluable non-exact items.
+
+    Exact items are excluded so CER/WER describe the severity of errors when an
+    error occurs. If ``evaluable_key`` is provided, non-evaluable items are also
+    excluded; for keys this lets missing keys be measured by detection rate
+    rather than being converted into a 100% text error.
+    """
     bucket: dict[str, int] = defaultdict(int)
+    count = 0
     for row in rows:
-        if evaluable_key is None or row[evaluable_key]:
-            _add_metrics(bucket, row[metric_key])
-    return _final_metrics(bucket)
+        if evaluable_key is not None and not row[evaluable_key]:
+            continue
+        if row[correct_key] is not False:
+            continue
+        count += 1
+        _add_metrics(bucket, row[metric_key])
+
+    result = _final_metrics(bucket)
+    if count == 0:
+        result["cer"] = None
+        result["wer"] = None
+    return count, result
 
 
 # ---------------------------------------------------------------------------
@@ -577,7 +600,7 @@ def _count_results(rows: list[dict[str, Any]]) -> dict[str, int]:
 # ---------------------------------------------------------------------------
 
 def build_field_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Aggregate by semantic field_id across all templates/documents."""
+    """Aggregate results by semantic field_id across templates/documents."""
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         groups[row["field_id"]].append(row)
@@ -585,70 +608,90 @@ def build_field_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
     for field_id, items in sorted(groups.items()):
         occurrences = len(items)
+        category = items[0]["category"]
         c = _count_results(items)
-        key_pre_aggr = _aggregate_metrics(items, "_key_pre_metrics")
-        key_post_aggr = _aggregate_metrics(items, "_key_post_metrics")
-        pre_aggr = _aggregate_metrics(items, "_value_pre_metrics", "value_evaluable_pre")
-        post_aggr = _aggregate_metrics(items, "_value_post_metrics", "value_evaluable_post")
+
+        key_non_exact, key_error_metrics = _aggregate_non_exact(
+            items,
+            "_key_pre_metrics",
+            "key_correct_pre",
+            "key_detected",
+        )
+        pre_non_exact, pre_error_metrics = _aggregate_non_exact(
+            items,
+            "_value_pre_metrics",
+            "value_correct_pre",
+            "value_evaluable_pre",
+        )
+        post_non_exact, post_error_metrics = _aggregate_non_exact(
+            items,
+            "_value_post_metrics",
+            "value_correct_post",
+            "value_evaluable_post",
+        )
 
         output.append({
             "field_id": field_id,
-            "category": items[0]["category"],
+            "category": category,
             "key_expected": " | ".join(sorted({str(r["key_expected"]) for r in items})),
             "templates": " | ".join(sorted({str(r["template"]) for r in items})),
             "occurrences": occurrences,
+
+            # Key quality is evaluated on PRE OCR text only.
             "key_detected": c["key_detected"],
+            "key_missing": occurrences - c["key_detected"],
             "key_detection_rate": _rate(c["key_detected"], occurrences),
-            # Historical key columns retain PRE semantics.
-            "key_correct": c["key_correct_pre"],
-            "key_accuracy": _rate(c["key_correct_pre"], occurrences),
-            "key_errors": occurrences - c["key_correct_pre"],
-            "key_cer": key_pre_aggr["cer"],
-            "key_wer": key_pre_aggr["wer"],
-            # Explicit key PRE/POST metrics.
-            "key_correct_pre": c["key_correct_pre"],
-            "key_errors_pre": occurrences - c["key_correct_pre"],
-            "key_accuracy_pre": _rate(c["key_correct_pre"], occurrences),
-            "key_cer_pre": key_pre_aggr["cer"],
-            "key_wer_pre": key_pre_aggr["wer"],
-            "key_correct_post": c["key_correct_post"],
-            "key_errors_post": occurrences - c["key_correct_post"],
-            "key_accuracy_post": _rate(c["key_correct_post"], occurrences),
-            "key_cer_post": key_post_aggr["cer"],
-            "key_wer_post": key_post_aggr["wer"],
+            "key_exact": c["key_correct_pre"],
+            "key_exact_rate": _rate(c["key_correct_pre"], occurrences),
+            "key_non_exact_detected": key_non_exact,
+            "key_cer_non_exact": key_error_metrics["cer"],
             "key_corrections_applied": c["key_corrected"],
-            # Value PRE/POST metrics, including local dictionary recovery.
+
+            # Values: coverage separates structural evaluability from OCR accuracy.
             "value_evaluable_pre": c["value_evaluable_pre"],
             "value_skipped_pre": occurrences - c["value_evaluable_pre"],
+            "value_coverage_pre": _rate(c["value_evaluable_pre"], occurrences),
+            "value_exact_pre": c["value_correct_pre"],
+            "value_exact_rate_pre": _rate(c["value_correct_pre"], c["value_evaluable_pre"]),
+            "value_non_exact_pre": pre_non_exact,
+            "value_cer_non_exact_pre": pre_error_metrics["cer"],
+            "value_wer_non_exact_pre": pre_error_metrics["wer"] if category == "string" else None,
+
             "value_evaluable_post": c["value_evaluable_post"],
             "value_skipped_post": occurrences - c["value_evaluable_post"],
-            "value_correct_pre": c["value_correct_pre"],
-            "value_errors_pre": c["value_evaluable_pre"] - c["value_correct_pre"],
-            "value_accuracy_pre": _rate(c["value_correct_pre"], c["value_evaluable_pre"]),
-            "value_cer_pre": pre_aggr["cer"],
-            "value_wer_pre": pre_aggr["wer"],
-            "value_correct_post": c["value_correct_post"],
-            "value_errors_post": c["value_evaluable_post"] - c["value_correct_post"],
-            "value_accuracy_post": _rate(c["value_correct_post"], c["value_evaluable_post"]),
-            "value_cer_post": post_aggr["cer"],
-            "value_wer_post": post_aggr["wer"],
-            "post_corrections_applied": c["corrected"],
+            "value_coverage_post": _rate(c["value_evaluable_post"], occurrences),
+            "value_exact_post": c["value_correct_post"],
+            "value_exact_rate_post": _rate(c["value_correct_post"], c["value_evaluable_post"]),
+            "value_non_exact_post": post_non_exact,
+            "value_cer_non_exact_post": post_error_metrics["cer"],
+            "value_wer_non_exact_post": post_error_metrics["wer"] if category == "string" else None,
+
+            # POST-processing diagnostics.
             "value_corrections_applied": c["value_corrected"],
             "total_corrections_applied": c["total_corrected"],
+
+            # Complete field success: key AND value correct.
             "field_correct_pre": c["field_correct_pre"],
-            "field_accuracy_pre": _rate(c["field_correct_pre"], c["value_evaluable_pre"]),
+            "field_accuracy_conditional_pre": _rate(
+                c["field_correct_pre"], c["value_evaluable_pre"]
+            ),
+            "field_success_rate_pre": _rate(c["field_correct_pre"], occurrences),
             "field_correct_post": c["field_correct_post"],
-            "field_accuracy_post": _rate(c["field_correct_post"], c["value_evaluable_post"]),
+            "field_accuracy_conditional_post": _rate(
+                c["field_correct_post"], c["value_evaluable_post"]
+            ),
+            "field_success_rate_post": _rate(c["field_correct_post"], occurrences),
         })
     return output
 
 
 def build_document_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Aggregate structural/exact success by document; no redundant CER/WER here."""
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         groups[row["document"]].append(row)
 
-    output = []
+    output: list[dict[str, Any]] = []
     for document, items in sorted(groups.items()):
         total = len(items)
         c = _count_results(items)
@@ -657,30 +700,35 @@ def build_document_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "template": items[0]["template"],
             "fields_total": total,
             "keys_detected": c["key_detected"],
+            "keys_missing": total - c["key_detected"],
             "key_detection_rate": _rate(c["key_detected"], total),
-            # Historical key columns retain PRE semantics.
-            "keys_correct": c["key_correct_pre"],
-            "key_accuracy": _rate(c["key_correct_pre"], total),
-            # Explicit key PRE/POST.
-            "keys_correct_pre": c["key_correct_pre"],
-            "key_accuracy_pre": _rate(c["key_correct_pre"], total),
-            "keys_correct_post": c["key_correct_post"],
-            "key_accuracy_post": _rate(c["key_correct_post"], total),
+            "keys_exact": c["key_correct_pre"],
+            "key_exact_rate": _rate(c["key_correct_pre"], total),
             "key_corrections_applied": c["key_corrected"],
-            # Value PRE/POST.
+
             "values_evaluable_pre": c["value_evaluable_pre"],
             "values_skipped_pre": total - c["value_evaluable_pre"],
+            "value_coverage_pre": _rate(c["value_evaluable_pre"], total),
+            "values_exact_pre": c["value_correct_pre"],
+            "value_exact_rate_pre": _rate(c["value_correct_pre"], c["value_evaluable_pre"]),
+
             "values_evaluable_post": c["value_evaluable_post"],
             "values_skipped_post": total - c["value_evaluable_post"],
-            "values_correct_pre": c["value_correct_pre"],
-            "value_accuracy_pre": _rate(c["value_correct_pre"], c["value_evaluable_pre"]),
-            "values_correct_post": c["value_correct_post"],
-            "value_accuracy_post": _rate(c["value_correct_post"], c["value_evaluable_post"]),
+            "value_coverage_post": _rate(c["value_evaluable_post"], total),
+            "values_exact_post": c["value_correct_post"],
+            "value_exact_rate_post": _rate(c["value_correct_post"], c["value_evaluable_post"]),
+
             "fields_correct_pre": c["field_correct_pre"],
-            "field_accuracy_pre": _rate(c["field_correct_pre"], c["value_evaluable_pre"]),
+            "field_accuracy_conditional_pre": _rate(
+                c["field_correct_pre"], c["value_evaluable_pre"]
+            ),
+            "field_success_rate_pre": _rate(c["field_correct_pre"], total),
             "fields_correct_post": c["field_correct_post"],
-            "field_accuracy_post": _rate(c["field_correct_post"], c["value_evaluable_post"]),
-            "post_corrections_applied": c["corrected"],
+            "field_accuracy_conditional_post": _rate(
+                c["field_correct_post"], c["value_evaluable_post"]
+            ),
+            "field_success_rate_post": _rate(c["field_correct_post"], total),
+
             "value_corrections_applied": c["value_corrected"],
             "total_corrections_applied": c["total_corrected"],
         })
@@ -688,54 +736,77 @@ def build_document_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def build_category_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Aggregate key metrics and value metrics by category/stage."""
-    buckets: dict[tuple[str, str], dict[str, Any]] = defaultdict(
-        lambda: {
-            "items_total": 0,
-            "items_evaluated": 0,
-            "items_skipped": 0,
-            "items_correct": 0,
-            "metrics": defaultdict(int),
-        }
+    """Build the compact metrics table used in the results section.
+
+    Final reporting contract:
+    * key: detection rate, exact rate, CER on detected non-exact keys;
+    * dictionary: coverage, exact rate, CER on non-exact values, PRE and POST;
+    * numeric: coverage, exact rate, CER on non-exact values;
+    * string: coverage, exact rate, CER and WER on non-exact values.
+
+    Value exact rates are conditional on evaluability. Missing/unreliable values
+    are represented by coverage instead of being mixed into OCR content accuracy.
+    """
+    output: list[dict[str, Any]] = []
+
+    total_keys = len(rows)
+    detected_keys = sum(bool(r["key_detected"]) for r in rows)
+    exact_keys = sum(r["key_correct_pre"] is True for r in rows)
+    key_statuses = Counter(str(r["key_status"]) for r in rows)
+    key_non_exact, key_error_metrics = _aggregate_non_exact(
+        rows,
+        "_key_pre_metrics",
+        "key_correct_pre",
+        "key_detected",
     )
+    output.append({
+        "category": "key",
+        "stage": "pre",
+        "items_total": total_keys,
+        "items_detected": detected_keys,
+        "items_missing": key_statuses["missing"],
+        "items_recovered": key_statuses["recovered"],
+        "items_local": key_statuses["local"],
+        "items_found": key_statuses["found"],
+        "detection_rate": _rate(detected_keys, total_keys),
+        "items_exact": exact_keys,
+        "exact_rate": _rate(exact_keys, total_keys),
+        "items_non_exact": key_non_exact,
+        "cer_non_exact": key_error_metrics["cer"],
+        "wer_non_exact": None,
+    })
 
-    # Keys have distinct PRE/POST stages. POST canonicalization uses only the
-    # known template and is never applied to missing keys.
-    for stage in STAGES:
-        for row in rows:
-            b = buckets[("key", stage)]
-            b["items_total"] += 1
-            b["items_evaluated"] += 1
-            b["items_correct"] += int(row[f"key_correct_{stage}"] is True)
-            _add_metrics(b["metrics"], row[f"_key_{stage}_metrics"])
+    for category in ("dictionary", "numeric", "string"):
+        category_rows = [r for r in rows if r["category"] == category]
+        for stage in VALUE_REPORT_STAGES[category]:
+            evaluable_key = f"value_evaluable_{stage}"
+            correct_key = f"value_correct_{stage}"
+            metric_key = f"_value_{stage}_metrics"
 
-    # Values have distinct PRE/POST evaluability because a dictionary value may
-    # be locally recovered POST even when PRE boundaries were unreliable.
-    for row in rows:
-        for stage in STAGES:
-            b = buckets[(row["category"], stage)]
-            b["items_total"] += 1
-            if not row[f"value_evaluable_{stage}"]:
-                b["items_skipped"] += 1
-                continue
-            b["items_evaluated"] += 1
-            b["items_correct"] += int(row[f"value_correct_{stage}"] is True)
-            _add_metrics(b["metrics"], row[f"_value_{stage}_metrics"])
+            total = len(category_rows)
+            evaluated = sum(bool(r[evaluable_key]) for r in category_rows)
+            exact = sum(r[correct_key] is True for r in category_rows)
+            non_exact, error_metrics = _aggregate_non_exact(
+                category_rows,
+                metric_key,
+                correct_key,
+                evaluable_key,
+            )
 
-    output = []
-    for (category, stage), b in sorted(buckets.items()):
-        aggr = _final_metrics(b["metrics"])
-        output.append({
-            "category": category,
-            "stage": stage,
-            "items_total": b["items_total"],
-            "items_evaluated": b["items_evaluated"],
-            "items_skipped": b["items_skipped"],
-            "items_correct": b["items_correct"],
-            "items_error": b["items_evaluated"] - b["items_correct"],
-            "accuracy": _rate(b["items_correct"], b["items_evaluated"]),
-            **aggr,
-        })
+            output.append({
+                "category": category,
+                "stage": stage,
+                "items_total": total,
+                "items_evaluated": evaluated,
+                "items_skipped": total - evaluated,
+                "coverage": _rate(evaluated, total),
+                "items_exact": exact,
+                "exact_rate": _rate(exact, evaluated),
+                "items_non_exact": non_exact,
+                "cer_non_exact": error_metrics["cer"],
+                "wer_non_exact": error_metrics["wer"] if category == "string" else None,
+            })
+
     return output
 
 
@@ -828,6 +899,16 @@ def main() -> None:
             "dictionary_margin": args.dictionary_margin,
         },
         "dictionaries_file": str(args.dictionaries) if args.dictionaries.exists() else None,
+        "metric_policy": {
+            "key": ["detection_rate", "exact_rate", "cer_non_exact"],
+            "dictionary": ["coverage", "exact_rate", "cer_non_exact"],
+            "numeric": ["coverage", "exact_rate", "cer_non_exact"],
+            "string": ["coverage", "exact_rate", "cer_non_exact", "wer_non_exact"],
+            "value_exact_rate_denominator": "evaluable_items",
+            "error_severity_subset": "evaluable_non_exact_items_only",
+            "error_aggregation": "micro_sum_errors_over_sum_reference_units",
+            "missing_keys_excluded_from_key_cer_non_exact": True,
+        },
         "key_postprocessing": {
             "enabled": True,
             "source": "template_expected",
@@ -856,12 +937,12 @@ def main() -> None:
         f"({100 * detected_keys / total_keys:.2f}%)"
     )
     print(
-        f"OCR keys exactly correct PRE: {correct_keys_pre}/{total_keys} "
+        f"OCR keys exactly correct: {correct_keys_pre}/{total_keys} "
         f"({100 * correct_keys_pre / total_keys:.2f}%)"
     )
     print(
-        f"OCR keys exactly correct POST: {correct_keys_post}/{total_keys} "
-        f"({100 * correct_keys_post / total_keys:.2f}%)"
+        f"OCR keys exactly correct after template canonicalization: "
+        f"{correct_keys_post}/{total_keys} ({100 * correct_keys_post / total_keys:.2f}%)"
     )
     print(f"Key canonicalizations applied from template: {key_corrections}")
     print(f"Value fields skipped PRE because of unreliable boundaries: {value_skipped_pre}")
